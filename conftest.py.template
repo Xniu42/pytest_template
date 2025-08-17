@@ -1,0 +1,200 @@
+#
+# Agent MUST adapt this template based on the project's structure and the Test Strategy.
+# Key placeholders to be resolved by the agent during analysis:
+# - [APP_INSTANCE_PATH]: Path to the FastAPI app instance (e.g., 'my_project.main.app')
+# - [DB_BASE_PATH]: Path to the SQLAlchemy declarative base (e.g., 'my_project.db.base.Base')
+# - [DB_SESSION_DEPENDENCY]: The actual DB session dependency function used in the app (e.g., get_db)
+# - [MODEL_PATHS]: Paths to all relevant SQLAlchemy models for factory generation.
+#
+import os
+import pytest
+import asyncio
+from typing import AsyncGenerator, Generator
+try:
+    import pytest_html
+except Exception:
+    pytest_html = None
+try:
+    from pytest_metadata.plugin import metadata_key
+except Exception:
+    metadata_key = None
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import sessionmaker
+from httpx import AsyncClient
+from fastapi.testclient import TestClient
+import factory
+from factory.alchemy import SQLAlchemyModelFactory
+
+# --- Agent-Resolved Imports: Agent MUST find and replace these with actual project paths ---
+from app.main import app  # Placeholder for [APP_INSTANCE_PATH]
+from app.db.base import Base  # Placeholder for [DB_BASE_PATH]
+from app.models.user import User  # Example model, placeholder for [MODEL_PATHS]
+# from app.dependencies import get_db # Placeholder for [DB_SESSION_DEPENDENCY]
+
+# --- 1. Base Configuration ---
+@pytest.fixture(scope="session")
+def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
+    """Creates an event loop for the entire test session."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+# --- 2. Database Configuration ---
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+
+@pytest.fixture(scope="session")
+async def db_engine():
+    """Create a test database engine."""
+    if not TEST_DATABASE_URL:
+        pytest.skip("TEST_DATABASE_URL is not set; skipping DB-dependent tests")
+
+    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+
+    async with engine.begin() as conn:
+        # Agent MUST ensure 'Base' is correctly imported from [DB_BASE_PATH]
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+@pytest.fixture(scope="session")
+def async_session_maker(db_engine):
+    """Create a session factory for creating database sessions."""
+    return async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+
+@pytest.fixture
+async def db_session(async_session_maker) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a database session with automatic rollback after each test."""
+    async with async_session_maker() as session:
+        try:
+            yield session
+            await session.rollback()  # Ensure test isolation
+        finally:
+            await session.close()
+
+# --- 3. Factory Configuration ---
+# Agent MUST create factories for all relevant models discovered during analysis.
+# The following is an EXAMPLE for a 'User' model.
+class UserFactory(SQLAlchemyModelFactory):
+    """Example factory for User model. Agent MUST adapt this for actual project models."""
+    class Meta:
+        # Agent MUST replace 'User' with an actual model class from [MODEL_PATHS]
+        model = User
+        sqlalchemy_session = None  # Will be set dynamically
+        sqlalchemy_session_persistence = "commit"
+    
+    id = factory.Sequence(lambda n: n)
+    email = factory.Sequence(lambda n: f'user{n}@example.com')
+    hashed_password = factory.LazyFunction(lambda: "hashed_test_password")
+    is_active = True
+
+@pytest.fixture
+def user_factory(db_session):
+    """Provide a factory for creating User instances. Agent should create similar fixtures for other models."""
+    UserFactory._meta.sqlalchemy_session = db_session
+    return UserFactory
+
+# --- 4. FastAPI Dependency Overrides ---
+@pytest.fixture(scope="module", autouse=True)
+def override_dependencies(db_session):
+    """Override FastAPI dependencies for testing."""
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+    
+    # Agent MUST identify the actual DB session dependency and replace 'get_db' if necessary.
+    # The dependency function itself should be imported from its actual location.
+    # app.dependency_overrides[get_db] = override_get_db
+    yield
+    app.dependency_overrides.clear()
+
+# --- 5. API Test Clients ---
+@pytest.fixture(scope="module")
+def client() -> Generator[TestClient, None, None]:
+    """Provides a TestClient for synchronous API endpoints."""
+    # Agent MUST ensure 'app' is correctly imported from [APP_INSTANCE_PATH]
+    with TestClient(app) as c:
+        yield c
+
+@pytest.fixture(scope="module")
+async def async_client() -> AsyncGenerator[AsyncClient, None]:
+    """Provides an AsyncClient for asynchronous API endpoints."""
+    # Agent MUST ensure 'app' is correctly imported from [APP_INSTANCE_PATH]
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        yield ac
+
+# --- 6. E2E Test Configuration (Optional) ---
+# This section is for Playwright and is generally project-agnostic.
+@pytest.fixture(scope="session")
+async def browser_context():
+    """Provide a browser context for E2E testing with Playwright."""
+    from playwright.async_api import async_playwright
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        context = await browser.new_context()
+        try:
+            yield context
+        finally:
+            await context.close()
+            await browser.close()
+
+@pytest.fixture
+async def page(browser_context):
+    """Provide a new page for each test."""
+    page = await browser_context.new_page()
+    try:
+        yield page
+    finally:
+        await page.close()
+
+# --- 7. pytest-html Reporting Hooks ---
+# This section is self-contained and generally does not need project-specific adaptation.
+import datetime
+
+# Derive TEST_SESSION_ID from configured HTML report path to avoid OS env deps
+SESSION_ID = ""
+
+def _derive_session_id_from_config(config: pytest.Config) -> str:
+    """Extract session id from --html path like tests/reports/<ID>/html/report.html.
+    Falls back to empty string if not available.
+    """
+    html_path = getattr(getattr(config, "option", None), "htmlpath", None)
+    if not html_path:
+        try:
+            html_path = config.getoption("--html")
+        except Exception:
+            html_path = None
+    if isinstance(html_path, str) and "reports/" in html_path:
+        try:
+            tail = html_path.split("reports/", 1)[1]
+            return tail.split("/", 1)[0]
+        except Exception:
+            return ""
+    return ""
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if pytest_html:
+        extras = getattr(report, "extras", [])
+        summary = f"{report.nodeid}::{report.when} -> {report.outcome}"
+        extras.append(pytest_html.extras.text(summary, name="result"))
+        report.extras = extras
+
+def pytest_html_results_summary(prefix, summary, postfix):
+    prefix.extend([f"<p>TEST_SESSION_ID: {SESSION_ID or 'N/A'}</p>"])
+
+def pytest_html_duration_format(duration):
+    duration_timedelta = datetime.timedelta(seconds=duration)
+    time = datetime.datetime(1, 1, 1) + duration_timedelta
+    return time.strftime("%H:%M:%S")
+
+def pytest_configure(config):
+    global SESSION_ID
+    SESSION_ID = _derive_session_id_from_config(config)
+    if metadata_key is not None:
+        config.stash[metadata_key]["TEST_SESSION_ID"] = SESSION_ID
