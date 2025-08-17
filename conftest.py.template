@@ -2,7 +2,7 @@
 # Agent MUST adapt this template based on the project's structure and the Test Strategy.
 # Key placeholders to be resolved by the agent during analysis:
 # - [APP_INSTANCE_PATH]: Path to the FastAPI app instance (e.g., 'my_project.main.app')
-# - [DB_BASE_PATH]: Path to the SQLAlchemy declarative base (e.g., 'my_project.db.base.Base')
+# - [TEST_DATABASE_URL]: Path to the SQLAlchemy declarative base (e.g., 'my_project.db.base.Base')
 # - [DB_SESSION_DEPENDENCY]: The actual DB session dependency function used in the app (e.g., get_db)
 # - [MODEL_PATHS]: Paths to all relevant SQLAlchemy models for factory generation.
 #
@@ -27,7 +27,7 @@ from factory.alchemy import SQLAlchemyModelFactory
 
 # --- Agent-Resolved Imports: Agent MUST find and replace these with actual project paths ---
 from app.main import app  # Placeholder for [APP_INSTANCE_PATH]
-from app.db.base import Base  # Placeholder for [DB_BASE_PATH]
+from app.db.base import Base  # Placeholder for [TEST_DATABASE_URL]
 from app.models.user import User  # Example model, placeholder for [MODEL_PATHS]
 # from app.dependencies import get_db # Placeholder for [DB_SESSION_DEPENDENCY]
 
@@ -51,7 +51,7 @@ async def db_engine():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
     async with engine.begin() as conn:
-        # Agent MUST ensure 'Base' is correctly imported from [DB_BASE_PATH]
+        # Agent MUST ensure 'Base' is correctly imported from [TEST_DATABASE_URL]
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
